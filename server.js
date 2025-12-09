@@ -1,95 +1,79 @@
-// server.js - Stripe Checkout backend for Suds & Lathers Co.
+// server.js
+import dotenv from 'dotenv';
+import express from 'express';
+import cors from 'cors';
+import Stripe from 'stripe';
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const Stripe = require('stripe');
+dotenv.config();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const app = express();
 
-// 🔗 Allow your frontend at port 5174
+// Make sure your .env has: STRIPE_SECRET_KEY=sk_test_...
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+// 👇 Replace this with your actual Netlify URL if it's different
+const NETLIFY_URL = 'https://tubular-bavarois-b598f2.netlify.app';
+
+// Allow your local dev and Netlify frontend to call this server
 app.use(
   cors({
     origin: [
       'http://localhost:5173',
       'http://localhost:5174',
-      'https://tubular-bavarois-b598f2.netlify.app', // your Netlify site
+      'http://localhost:5175',
+      NETLIFY_URL,
     ],
+    methods: ['GET', 'POST'],
   })
 );
 
+app.use(express.json());
 
-// (Optional) simple test route
+// Simple test route so you can open the backend in a browser
 app.get('/', (req, res) => {
-  res.send('Stripe server is running ✅');
+  res.send('Stripe backend is running.');
 });
 
+// Create Stripe Checkout session
 app.post('/create-checkout-session', async (req, res) => {
   try {
-    const { items } = req.body;
+    const items = req.body.items || [];
 
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Cart is empty or invalid.' });
+      return res.status(400).json({ error: 'No items in request' });
     }
 
-    // 1) Turn cart items into Stripe line items
-    const lineItems = items.map((item) => ({
+    const line_items = items.map((item) => ({
       price_data: {
         currency: 'usd',
         product_data: {
           name: item.name,
         },
-        unit_amount: Math.round(item.price * 100), // dollars → cents
+        // item.price is like 8.25, Stripe needs cents
+        unit_amount: Math.round(item.price * 100),
       },
       quantity: item.qty,
     }));
 
-    // 2) Compute total quantity for shipping rule
-    const totalQty = items.reduce(
-      (sum, item) => sum + (item.qty || 1),
-      0
-    );
-
-    // 3) Your shipping rule:
-    // - $0 if no items
-    // - Free if 3+ bars
-    // - Otherwise $3 per bar
-    let shippingAmount = 0;
-    if (totalQty > 0 && totalQty < 3) {
-      shippingAmount = totalQty * 300; // $3 → 300 cents per bar
-    }
-
-    // 4) Add shipping line item if needed
-    if (shippingAmount > 0) {
-      lineItems.push({
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: 'Shipping',
-          },
-          unit_amount: shippingAmount,
-        },
-        quantity: 1,
-      });
-    }
-
-    // 5) Create Stripe Checkout Session
     const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
       mode: 'payment',
-      line_items: lineItems,
-      success_url: 'http://tubular-bavarois-b598f2.netlify.app/?success=true',
-      cancel_url: 'http://tubular-bavarois-b598f2.netlify.app/?canceled=true',
+      line_items,
+      // After successful payment, send back to your Netlify site
+      success_url: `${NETLIFY_URL}/?success=true`,
+      cancel_url: `${NETLIFY_URL}/?canceled=true`,
     });
 
-    return res.json({ url: session.url });
+    res.json({ url: session.url });
   } catch (err) {
-    console.error('Stripe error:', err);
-    res.status(500).json({ error: 'Failed to create checkout session' });
+    console.error('Error creating checkout session:', err);
+    res.status(500).json({ error: 'Unable to create checkout session' });
   }
 });
 
-const PORT = 4242;
+// Render will give you PORT, otherwise use 4242 locally
+const PORT = process.env.PORT || 4242;
+
 app.listen(PORT, () => {
-  console.log(`Stripe server listening at http://localhost:${PORT}`);
+  console.log(`Stripe server listening on port ${PORT}`);
 });
