@@ -1,79 +1,128 @@
-// server.js
-import dotenv from 'dotenv';
-import express from 'express';
-import cors from 'cors';
-import Stripe from 'stripe';
+// server.js - Stripe backend for Suds & Lathers Co.
 
-dotenv.config();
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const Stripe = require('stripe');
 
-const app = express();
-
-// Make sure your .env has: STRIPE_SECRET_KEY=sk_test_...
+// --- Stripe setup ---
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error('❌ STRIPE_SECRET_KEY is missing in .env');
+  process.exit(1);
+}
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// 👇 Replace this with your actual Netlify URL if it's different
-const NETLIFY_URL = 'https://tubular-bavarois-b598f2.netlify.app';
+// --- Express app setup ---
+const app = express();
 
-// Allow your local dev and Netlify frontend to call this server
+// Allow JSON bodies
+app.use(express.json());
+
+// CORS: allow local dev + Netlify site
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'https://tubular-bavarois-b598f2.netlify.app',
+];
+
 app.use(
   cors({
-    origin: [
-      'http://localhost:5173',
-      'http://localhost:5174',
-      'http://localhost:5175',
-      NETLIFY_URL,
-    ],
-    methods: ['GET', 'POST'],
+    origin: function (origin, callback) {
+      // Allow tools like Postman (no origin) and known frontends
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn('Blocked CORS origin:', origin);
+        callback(null, false);
+      }
+    },
   })
 );
 
-app.use(express.json());
-
-// Simple test route so you can open the backend in a browser
+// Health-check / root route
 app.get('/', (req, res) => {
   res.send('Stripe backend is running.');
 });
 
-// Create Stripe Checkout session
+// Helper: build line items for soaps
+function buildSoapLineItems(items) {
+  return items.map((item) => ({
+    price_data: {
+      currency: 'usd',
+      product_data: {
+        name: item.name,
+      },
+      // prices from frontend are in dollars; Stripe needs cents
+      unit_amount: Math.round(item.price * 100),
+    },
+    quantity: item.qty,
+  }));
+}
+
+// Helper: shipping rules
+// - Free shipping if 3 or more bars
+// - Otherwise $3 per bar
+function calculateShippingCents(items) {
+  const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
+  if (totalQty === 0) return 0;
+  if (totalQty >= 3) return 0;
+  return totalQty * 300; // 3.00 per bar in cents
+}
+
+// Main checkout route
 app.post('/create-checkout-session', async (req, res) => {
   try {
-    const items = req.body.items || [];
+    const items = req.body && req.body.items;
 
+    // Guard against missing or invalid items
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'No items in request' });
+      console.error('❌ No items provided in request body:', req.body);
+      return res.status(400).json({ error: 'No items provided' });
     }
 
-    const line_items = items.map((item) => ({
-      price_data: {
-        currency: 'usd',
-        product_data: {
-          name: item.name,
+    console.log('🧴 Creating checkout for items:', items);
+
+    const lineItems = buildSoapLineItems(items);
+    const shippingCents = calculateShippingCents(items);
+
+    if (shippingCents > 0) {
+      lineItems.push({
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'Shipping',
+          },
+          unit_amount: shippingCents,
         },
-        // item.price is like 8.25, Stripe needs cents
-        unit_amount: Math.round(item.price * 100),
-      },
-      quantity: item.qty,
-    }));
+        quantity: 1,
+      });
+    }
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
       mode: 'payment',
-      line_items,
-      // After successful payment, send back to your Netlify site
-      success_url: `${NETLIFY_URL}/?success=true`,
-      cancel_url: `${NETLIFY_URL}/?canceled=true`,
+      payment_method_types: ['card'],
+      line_items: lineItems,
+      success_url:
+        'https://tubular-bavarois-b598f2.netlify.app/?success=true',
+      cancel_url:
+        'https://tubular-bavarois-b598f2.netlify.app/?canceled=true',
+      // You can turn on automatic tax in Stripe dashboard & set this to true
+      automatic_tax: { enabled: false },
     });
+
+    console.log('✅ Session created:', session.id);
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error('Error creating checkout session:', err);
-    res.status(500).json({ error: 'Unable to create checkout session' });
+    console.error('❌ Stripe error:', err);
+    res
+      .status(500)
+      .json({ error: 'Stripe error', details: err.message ?? 'Unknown error' });
   }
 });
 
-// Render will give you PORT, otherwise use 4242 locally
-const PORT = process.env.PORT || 4242;
-
-app.listen(PORT, () => {
-  console.log(`Stripe server listening on port ${PORT}`);
+// --- Start server ---
+const port = process.env.PORT || 4242;
+app.listen(port, () => {
+  console.log(`Stripe server listening on port ${port}`);
 });
