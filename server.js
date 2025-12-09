@@ -19,7 +19,7 @@ const app = express();
 // Parse JSON bodies
 app.use(express.json());
 
-// CORS: for now, allow all origins so Netlify + local both work
+// CORS: allow all origins so Netlify + local both work
 app.use(cors());
 
 // Simple health check
