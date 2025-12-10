@@ -81,9 +81,9 @@ app.post('/create-checkout-session', async (req, res) => {
       payment_method_types: ['card'],
       line_items: lineItems,
       success_url:
-        'https://tubular-bavarois-b598f2.netlify.app/?success=true',
+        'https://sudsandlathers.com/?success=true',
       cancel_url:
-        'https://tubular-bavarois-b598f2.netlify.app/?canceled=true',
+        'https://sudsandlathers.com/?canceled=true',
       automatic_tax: { enabled: false },
     });
 
@@ -104,4 +104,3 @@ const port = process.env.PORT || 4242;
 app.listen(port, () => {
   console.log(`Stripe server listening on port ${port}`);
 });
-
