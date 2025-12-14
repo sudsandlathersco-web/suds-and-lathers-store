@@ -73,14 +73,12 @@ app.post('/create-checkout-session', async (req, res) => {
     const items = req.body?.items;
 
     if (!Array.isArray(items) || items.length === 0) {
-      console.error('❌ No items provided in request body');
       return res.status(400).json({ error: 'No items provided' });
     }
 
     const lineItems = buildSoapLineItems(items);
-
-    // Add shipping as a line item
     const shippingCents = calculateShippingCents(items);
+
     if (shippingCents > 0) {
       lineItems.push({
         price_data: {
@@ -91,6 +89,29 @@ app.post('/create-checkout-session', async (req, res) => {
         quantity: 1,
       });
     }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: lineItems,
+
+      // automatic tax
+      automatic_tax: { enabled: true },
+
+      // helpful for tax calculation
+      customer_creation: 'always',
+      billing_address_collection: 'required',
+      shipping_address_collection: { allowed_countries: ['US'] },
+
+      success_url: 'https://sudsandlathers.com/?success=true',
+      cancel_url: 'https://sudsandlathers.com/?canceled=true',
+    });
+
+    return res.json({ url: session.url });
+  } catch (err) {
+    console.error('❌ Stripe error:', err);
+    return res.status(500).json({ error: 'Stripe error', message: err.message });
+  }
+});
 
     console.log('🧴 Creating Stripe session with line_items:', lineItems);
 
