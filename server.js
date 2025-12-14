@@ -19,8 +19,27 @@ const app = express();
 // Parse JSON bodies
 app.use(express.json());
 
-// CORS: allow all origins so Netlify + local both work
-app.use(cors());
+// ✅ CORS (allow your Netlify site + local dev)
+const allowedOrigins = [
+  'https://sudsandlathers.com',
+  'https://www.sudsandlathers.com',
+  'https://tubular-bavarois-b598f2.netlify.app', // keep if you still use this
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // allow requests with no origin (like curl/postman)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: false,
+  })
+);
 
 // Simple health check
 app.get('/', (req, res) => {
@@ -32,28 +51,26 @@ function buildSoapLineItems(items) {
   return items.map((item) => ({
     price_data: {
       currency: 'usd',
-      product_data: {
-        name: item.name,
-      },
-      unit_amount: Math.round(item.price * 100), // dollars -> cents
+      product_data: { name: item.name },
+      unit_amount: Math.round(Number(item.price) * 100), // dollars -> cents
     },
-    quantity: item.qty,
+    quantity: Number(item.qty) || 1,
   }));
 }
 
-// Shipping: 0 if 3+ bars, otherwise $3 per bar
+// Shipping: free if 5+ bars, otherwise $2.50 per bar
 function calculateShippingCents(items) {
-  const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
+  const totalQty = items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
   if (totalQty === 0) return 0;
-  if (totalQty >= 3) return 0;
-  return totalQty * 300; // $3 per bar
+  if (totalQty >= 5) return 0;
+  return totalQty * 250; // $2.50 per bar
 }
 
 app.post('/create-checkout-session', async (req, res) => {
   try {
     console.log('📩 Incoming /create-checkout-session body:', req.body);
 
-    const items = req.body && req.body.items;
+    const items = req.body?.items;
 
     if (!Array.isArray(items) || items.length === 0) {
       console.error('❌ No items provided in request body');
@@ -61,8 +78,9 @@ app.post('/create-checkout-session', async (req, res) => {
     }
 
     const lineItems = buildSoapLineItems(items);
-    const shippingCents = calculateShippingCents(items);
 
+    // Add shipping as a line item
+    const shippingCents = calculateShippingCents(items);
     if (shippingCents > 0) {
       lineItems.push({
         price_data: {
@@ -78,23 +96,26 @@ app.post('/create-checkout-session', async (req, res) => {
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      payment_method_types: ['card'],
       line_items: lineItems,
-      success_url:
-        'https://sudsandlathers.com/?success=true',
-      cancel_url:
-        'https://sudsandlathers.com/?canceled=true',
-      automatic_tax: { enabled: false },
+
+      // ✅ Stripe automatic tax
+      automatic_tax: { enabled: true },
+
+      // ✅ Collect address so Stripe can calculate tax correctly
+      billing_address_collection: 'auto',
+      shipping_address_collection: { allowed_countries: ['US'] },
+
+      success_url: 'https://sudsandlathers.com/?success=true',
+      cancel_url: 'https://sudsandlathers.com/?canceled=true',
     });
 
     console.log('✅ Stripe session created:', session.id);
-
     res.json({ url: session.url });
   } catch (err) {
     console.error('❌ Stripe error:', err);
     res.status(500).json({
       error: 'Stripe error',
-      message: err.message || 'Unknown Stripe error',
+      message: err?.message || 'Unknown Stripe error',
     });
   }
 });
