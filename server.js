@@ -16,7 +16,38 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // --- Express app setup ---
 const app = express();
 
-// IMPORTANT: parse JSON bodies
+// ✅ Stripe webhook MUST use RAW body, and MUST be defined BEFORE express.json()
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body, // raw buffer
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error('❌ Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // ✅ Event: Checkout finished successfully
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    console.log('✅ Webhook: checkout.session.completed', {
+      id: session.id,
+      email: session.customer_details?.email,
+      amount_total: session.amount_total,
+    });
+
+    // Next step later: update inventory + email notification
+  }
+
+  res.json({ received: true });
+});
+
+// ✅ Normal middleware for all non-webhook routes
 app.use(express.json());
 
 // CORS: allow Netlify + local (allow all is fine for now)
@@ -36,9 +67,7 @@ function buildSoapLineItems(items) {
   return items.map((item) => ({
     price_data: {
       currency: 'usd',
-      product_data: {
-        name: item.name,
-      },
+      product_data: { name: item.name },
       unit_amount: Math.round(item.price * 100), // dollars -> cents
     },
     quantity: item.qty,
@@ -80,19 +109,15 @@ app.post('/create-checkout-session', async (req, res) => {
 
     console.log('🧴 Creating Stripe session with line_items:', lineItems);
 
-    // IMPORTANT:
-    // automatic_tax requires you to set an Origin address in Stripe Tax settings (even in TEST mode)
-    // If you haven't done that yet, set enabled:false temporarily, or go set the origin address in Stripe.
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
       line_items: lineItems,
 
-      // ---- TAX ----
-      // Turn this ON only after you set your Origin address in Stripe Tax settings (test + live)
+      // ✅ Turn on automatic tax AFTER you set Stripe Tax origin address
+      // If your origin address is set now, flip this to true.
       automatic_tax: { enabled: true },
 
-      // Helpful for tax accuracy
       billing_address_collection: 'auto',
       shipping_address_collection: { allowed_countries: ['US'] },
 
@@ -101,7 +126,6 @@ app.post('/create-checkout-session', async (req, res) => {
     });
 
     console.log('✅ Stripe session created:', session.id);
-
     res.json({ url: session.url });
   } catch (err) {
     console.error('❌ Stripe error:', err);
@@ -117,4 +141,3 @@ const port = process.env.PORT || 4242;
 app.listen(port, () => {
   console.log(`Stripe server listening on port ${port}`);
 });
-
